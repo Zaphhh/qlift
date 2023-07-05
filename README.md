@@ -1,5 +1,5 @@
 # Qlift
-Swift 5.9 API for Qt 6
+Swift 5.8+ API for Qt 6
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/Longhanks/qlift-swift-example/master/LICENSE)
 
