@@ -1,4 +1,4 @@
-// swift-tools-version:5.3
+// swift-tools-version:5.9
 import PackageDescription
 
 let package = Package(
@@ -9,8 +9,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "Qlift", dependencies: ["CQlift"]),
-        .target(name: "CQlift", dependencies: ["CQt5Widgets"]),
-        .systemLibrary(name: "CQt5Widgets", pkgConfig: "Qt5Widgets"),
+        .target(name: "CQlift", dependencies: ["CQt6Widgets"]),
+        .systemLibrary(name: "CQt6Widgets", pkgConfig: "Qt6Widgets"),
         .target(name: "qlift-uic")
     ],
     cxxLanguageStandard: .cxx1z
