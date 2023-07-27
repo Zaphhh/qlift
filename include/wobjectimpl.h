@@ -26,29 +26,40 @@
 
 namespace w_internal {
 
-// Match MetaDataFlags constants form the MetaDataFlags in qmetaobject_p.h
-enum : uint { IsUnresolvedType = 0x80000000, IsUnresolvedNotifySignal = 0x70000000 };
+#if __cplusplus > 201700L
+#define W_IF_CONSTEXPR constexpr
+#else
+#define W_IF_CONSTEXPR
+#endif
 
-/// all details about a class T
-template<class T, class Name, size_t L = 1024*1024*1024>
-struct ObjectInfo {
-    using Type = T;
-    static constexpr auto counter = L;
-    static constexpr auto name = StringView{Name::value};
+    // Match MetaDataFlags constants form the MetaDataFlags in qmetaobject_p.h
+    enum : uint
+    {
+        IsUnresolvedType = 0x80000000,
+        IsUnresolvedNotifySignal = 0x70000000
+    };
 
-    static constexpr int signalCount = stateCount<L, SignalStateTag, T**>;
-    static constexpr int slotCount = stateCount<L, SlotStateTag, T**>;
-    static constexpr int methodCount = signalCount + slotCount + stateCount<L, MethodStateTag, T**>;
-    static constexpr int constructorCount = stateCount<L, ConstructorStateTag, T**>;
-    static constexpr int propertyCount = stateCount<L, PropertyStateTag, T**>;
-    static constexpr int enumCount = stateCount<L, EnumStateTag, T**>;
-    static constexpr int classInfoCount = stateCount<L, ClassInfoStateTag, T**>;
-    static constexpr int interfaceCount = stateCount<L, InterfaceStateTag, T**>;
+    /// all details about a class T
+    template <class T, class Name, size_t L = 1024 * 1024 * 1024>
+    struct ObjectInfo
+    {
+        using Type = T;
+        static constexpr auto counter = L;
+        static constexpr auto name = StringView{Name::value};
 
-    static constexpr auto methodSequence = make_index_sequence<methodCount>{};
-    static constexpr auto constructorSequence = make_index_sequence<constructorCount>{};
-    static constexpr auto propertySequence = make_index_sequence<propertyCount>{};
-    static constexpr auto interfaceSequence = make_index_sequence<interfaceCount>{};
+        static constexpr int signalCount = stateCount<L, SignalStateTag, T **>;
+        static constexpr int slotCount = stateCount<L, SlotStateTag, T **>;
+        static constexpr int methodCount = signalCount + slotCount + stateCount<L, MethodStateTag, T **>;
+        static constexpr int constructorCount = stateCount<L, ConstructorStateTag, T **>;
+        static constexpr int propertyCount = stateCount<L, PropertyStateTag, T **>;
+        static constexpr int enumCount = stateCount<L, EnumStateTag, T **>;
+        static constexpr int classInfoCount = stateCount<L, ClassInfoStateTag, T **>;
+        static constexpr int interfaceCount = stateCount<L, InterfaceStateTag, T **>;
+
+        static constexpr auto methodSequence = make_index_sequence<methodCount>{};
+        static constexpr auto constructorSequence = make_index_sequence<constructorCount>{};
+        static constexpr auto propertySequence = make_index_sequence<propertyCount>{};
+        static constexpr auto interfaceSequence = make_index_sequence<interfaceCount>{};
 
 #if __cplusplus > 201700L
     template<size_t Idx>
@@ -113,6 +124,27 @@ constexpr void foldMethods(F&& f) {
     foldState<L, MethodStateTag, T>(f);
 }
 
+template <class T>
+constexpr auto fetchExplicitName(const StringView &defaultName, ...)
+{
+    return defaultName;
+}
+
+template <class T>
+constexpr auto fetchExplicitName(const StringView &, int) -> decltype(w_explicitObjectName(static_cast<T *>(nullptr)))
+{
+    return w_explicitObjectName(static_cast<T *>(nullptr));
+}
+
+constexpr bool isPropertyMetacall(QMetaObject::Call call) noexcept
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return (call >= QMetaObject::ReadProperty && call <= QMetaObject::ResetProperty) || call == QMetaObject::RegisterPropertyMetaType || call == QMetaObject::BindableProperty;
+#else
+    return (call >= QMetaObject::ReadProperty && call <= QMetaObject::QueryPropertyUser) || call == QMetaObject::RegisterPropertyMetaType;
+#endif
+}
+
 /// Helper to get information about the notify signal of the property within object T
 template<size_t L, size_t PropIdx, typename T, typename O>
 struct ResolveNotifySignal {
@@ -172,7 +204,7 @@ constexpr bool hasNotifySignal() {
 template<class State>
 struct ClassInfoGenerator {
     State& s;
-    constexpr ClassInfoGenerator(State& s) : s(s) {}
+    constexpr ClassInfoGenerator(State &_s) : s(_s) {}
 
     template<class ClassInfo, class Index>
     constexpr void operator() (const ClassInfo& ci, Index) {
@@ -199,16 +231,26 @@ struct MethodGenerator {
     State& s;
     int parameterIndex;
     MethodGenerator(const MethodGenerator&) = delete;
-    constexpr MethodGenerator(State& s, int pi) : s(s), parameterIndex(pi) {}
+    constexpr MethodGenerator(State &_s, int pi) : s(_s), parameterIndex(pi) {}
 
     template<class Method, class Index>
     constexpr void operator() (const Method& method, Index) {
         s.addString(method.name); // name
-        s.addInts((uint)Method::argCount,
-                   parameterIndex, //parameters
-                   1, //tag, always \0
-                   adjustFlags(Method::flags, typename Method::IntegralConstant()));
+        constexpr uint flags = adjustFlags(Method::flags, typename Method::IntegralConstant());
+        s.addInts(
+            (uint)Method::argCount,
+            parameterIndex, // parameters
+            1,              // tag, always \0
+            flags
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            ,
+            s.metaTypeCount
+#endif
+        );
         parameterIndex += 1 + Method::argCount * 2;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        registerMetaTypes(method);
+#endif
     }
 
 private:
@@ -218,8 +260,62 @@ private:
             // Auto-detect the access specifier
             f |= isPublic<T, M>::value ? W_Access::Public.value : isProtected<T,M>::value ? W_Access::Protected.value : W_Access::Private.value;
         }
-        return f & static_cast<uint>(~W_Access::Private.value); // Because QMetaMethod::Private is 0, but not W_Access::Private;
+        f &= static_cast<uint>(~W_Access::Private.value); // Because QMetaMethod::Private is 0, but not W_Access::Private;
+        return f;
     }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    template <class Method>
+    constexpr void registerMetaTypes(const Method &method)
+    {
+        generateSingleMethodParameter(method.func);
+    }
+    template <class... Args>
+    constexpr void registerMetaTypes(const MetaConstructorInfo<Args...> &)
+    {
+        (s.template addMetaType<Args>(), ...);
+    }
+
+    // non-const function
+    template <typename Obj, typename Ret, typename... Args>
+    constexpr void generateSingleMethodParameter(Ret (Obj::*)(Args...))
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+    template <typename Obj, typename Ret, typename... Args>
+    constexpr void generateSingleMethodParameter(Ret (Obj::*)(Args...) noexcept)
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+    template <typename Obj, typename Ret, typename... Args>
+    // const function
+    constexpr void generateSingleMethodParameter(Ret (Obj::*)(Args...) const)
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+    template <typename Obj, typename Ret, typename... Args>
+    constexpr void generateSingleMethodParameter(Ret (Obj::*)(Args...) const noexcept)
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+    // static member functions
+    template <typename Ret, typename... Args>
+    constexpr void generateSingleMethodParameter(Ret (*)(Args...))
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+    template <typename Ret, typename... Args>
+    constexpr void generateSingleMethodParameter(Ret (*)(Args...) noexcept)
+    {
+        s.template addMetaType<Ret>();
+        (s.template addMetaType<Args>(), ...);
+    }
+#endif
 };
 
 /// compute if type T is a builtin QMetaType
@@ -260,13 +356,19 @@ constexpr void handleType(State& s, StringView v, std::enable_if_t<!MetaTypeIdIs
 }
 #endif
 
-template<class State, class T>
-struct PropertyGenerator {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+template <class State, size_t L, class T>
+#else
+template <class State, class T>
+#endif
+struct PropertyGenerator
+{
     State& s;
-    constexpr PropertyGenerator(State& s) : s(s) {}
+    constexpr PropertyGenerator(State &_s) : s(_s) {}
 
-    template<class Prop, class Index>
-    constexpr void operator() (const Prop& prop, Index) {
+    template <class Prop, size_t Idx>
+    constexpr void operator()(const Prop &prop, Index<Idx>)
+    {
         s.addString(prop.name);
         handleType<typename Prop::PropertyType>(s, prop.typeStr);
         constexpr uint moreFlags = (QtPrivate::IsQEnumHelper<typename Prop::PropertyType>::Value
@@ -275,8 +377,56 @@ struct PropertyGenerator {
         constexpr uint defaultFlags = 0 | PropertyFlags::Stored | PropertyFlags::Scriptable
             | PropertyFlags::Designable;
         s.addInts(Prop::flags | moreFlags | finalFlag | defaultFlags);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        addSignal(prop.notify, index<Idx>);
+        s.addInts(0); // revision
+#endif
+    }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    template <size_t Idx>
+    constexpr void addSignal(Empty, Index<Idx>)
+    {
+        s.addInts(-1);
+    }
+
+    // Signal in the same class
+    template <size_t Idx, typename Func>
+    constexpr void addSignal(Func, Index<Idx>, std::enable_if_t<std::is_same<T, typename QtPrivate::FunctionPointer<Func>::Object>::value, int> = 0)
+    {
+        constexpr int signalIndex = ResolveNotifySignal<L, Idx, T, T>::signalIndex();
+        static_assert(signalIndex >= 0, "NOTIFY signal in parent class not registered as a W_SIGNAL");
+        s.addInts(signalIndex);
+    }
+
+    // Signal in a parent class
+    template <size_t Idx, typename Func>
+    constexpr void addSignal(Func, Index<Idx>, std::enable_if_t<!std::is_same<T, typename QtPrivate::FunctionPointer<Func>::Object>::value, int> = 0)
+    {
+        using O = typename QtPrivate::FunctionPointer<Func>::Object;
+        using OP = O **;
+        constexpr int signalIndex = ResolveNotifySignal<L, Idx, T, O>::signalIndex();
+        static_assert(signalIndex >= 0, "NOTIFY signal in parent class not registered as a W_SIGNAL");
+        constexpr auto sig = w_state(index<signalIndex>, SignalStateTag{}, OP{});
+        s.template addTypeString<IsUnresolvedNotifySignal>(sig.name);
+    }
+#endif
+};
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+template <class State, class T>
+struct PropertyMetaTypeGenerator
+{
+    State &s;
+    constexpr PropertyMetaTypeGenerator(State &_s) : s(_s) {}
+
+    template <class Prop, class I>
+    constexpr void operator()(const Prop &, I)
+    {
+        s.template addMetaType<typename Prop::PropertyType>();
     }
 };
+#endif
 
 #if __cplusplus > 201700L
 template<class State, size_t L, class T, bool hasNotify>
@@ -293,9 +443,8 @@ struct NotifySignalGenerator<State, L, T, false> {
 template<class State, size_t L, class T>
 struct NotifySignalGenerator<State, L, T, true> {
 #endif
-    using TP = T**;
     State& s;
-    constexpr NotifySignalGenerator(State& s) : s(s) {}
+    constexpr NotifySignalGenerator(State &_s) : s(_s) {}
 
 #if __cplusplus > 201700L
     template<class Prop, size_t Idx>
@@ -344,7 +493,7 @@ struct EnumGenerator {
     State& s;
     int dataIndex{};
     EnumGenerator(const EnumGenerator&) = delete;
-    constexpr EnumGenerator(State& s, int di) : s(s), dataIndex(di) {}
+    constexpr EnumGenerator(State &_s, int di) : s(_s), dataIndex(di) {}
 
     template<class Enum, class Index>
     constexpr void operator() (const Enum& e, Index) {
@@ -352,11 +501,8 @@ struct EnumGenerator {
         (void)nameIndex;
         s.addString(e.name); // name
 #if QT_VERSION >= QT_VERSION_CHECK(5, 12, 0)
-#if __cplusplus > 201700L
-        if constexpr (Enum::hasAlias) s.addString(e.alias); // alias
-#else
-        if (Enum::hasAlias) s.addString(e.alias); // alias
-#endif
+        if W_IF_CONSTEXPR (Enum::hasAlias)
+            s.addString(e.alias); // alias
         else s.addInts(nameIndex);
 #endif
         s.addInts(Enum::flags, (uint)Enum::count, dataIndex);
@@ -367,7 +513,7 @@ struct EnumGenerator {
 template<class State>
 struct EnumValuesGenerator {
     State& s;
-    constexpr EnumValuesGenerator(State& s) : s(s) {}
+    constexpr EnumValuesGenerator(State &_s) : s(_s) {}
 
     template<class Enum, class Index>
     constexpr void operator() (const Enum& e, Index) {
@@ -435,7 +581,7 @@ constexpr void handleArgNames(State& ss, const StringViewArray<NameCount>& param
 template<class State>
 struct MethodParametersGenerator {
     State& s;
-    constexpr MethodParametersGenerator(State& s) : s(s) {}
+    constexpr MethodParametersGenerator(State &_s) : s(_s) {}
     template<class Method, class Index>
     constexpr void operator() (const Method& method, Index) {
         generateSingleMethodParameter(method.func, method);
@@ -492,7 +638,7 @@ private:
 template<class State>
 struct ConstructorParametersGenerator {
     State& s;
-    constexpr ConstructorParametersGenerator(State& s) : s(s) {}
+    constexpr ConstructorParametersGenerator(State &_s) : s(_s) {}
 
     template<typename... Args, class Index>
     constexpr void operator() (const MetaConstructorInfo<Args...>& info, Index) {
@@ -559,19 +705,22 @@ struct LayoutBuilder {
     size_t stringSize{};
     uint stringCount{};
     uint intCount{};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    uint metaTypeCount{};
+#endif
 
     constexpr void addString(const StringView& s) {
-        stringSize += s.size();
+        stringSize += s.size() + 1;
         stringCount += 1;
         intCount += 1;
     }
     constexpr void addStringUntracked(const StringView& s) {
-        stringSize += s.size();
+        stringSize += s.size() + 1;
         stringCount += 1;
     }
     template<uint Flag = IsUnresolvedType>
     constexpr void addTypeString(const StringView& s) {
-        stringSize += s.size();
+        stringSize += s.size() + 1;
         stringCount += 1;
         intCount += 1;
     }
@@ -579,50 +728,82 @@ struct LayoutBuilder {
     constexpr void addInts(Ts...) {
         intCount += sizeof... (Ts);
     }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    template <class T, bool = false>
+    constexpr void addMetaType()
+    {
+        metaTypeCount += 1;
+    }
+#endif
 };
 struct DataBuilder {
     char* stringCharP{};
     qptrdiff* stringOffestP{};
     int* stringLengthP{};
     uint* intP{};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    const QtPrivate::QMetaTypeInterface **metaTypeP{};
+#endif
     uint stringCount{};
     uint intCount{};
     qptrdiff stringOffset{};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    uint metaTypeCount{};
+#endif
 
     constexpr DataBuilder() = default;
     DataBuilder(const DataBuilder&) = delete;
-    template<class Holder>
-    constexpr DataBuilder(Holder& r)
-        : stringCharP(r.stringChars)
-        , stringOffestP(r.stringOffsets)
-        , stringLengthP(r.stringLengths)
-        , intP(r.ints)
-        , stringOffset(r.stringOffset) {}
+    template <class Holder>
+    constexpr DataBuilder(Holder &r)
+        : stringCharP(r.stringChars), stringOffestP(r.stringOffsets), stringLengthP(r.stringLengths), intP(r.ints)
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+          ,
+          metaTypeP(r.metaTypes)
+#endif
+          ,
+          stringOffset(r.stringOffset)
+    {
+    }
 
     constexpr void addString(const StringView& s) {
         for (auto c : s) *stringCharP++ = c;
+        *stringCharP++ = '\0';
         *stringOffestP++ = stringOffset;
-        *stringLengthP++ = s.size() - 1;
+        *stringLengthP++ = s.size();
         *intP++ = stringCount;
-        stringOffset += s.size() - sizeof(QByteArrayData);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        stringOffset += 1 + s.size();
+#else
+        stringOffset += 1 + s.size() - qptrdiff(sizeof(QByteArrayData));
+#endif
         stringCount += 1;
         intCount += 1;
     }
     constexpr void addStringUntracked(const StringView& s) {
         for (auto c : s) *stringCharP++ = c;
+        *stringCharP++ = '\0';
         *stringOffestP++ = stringOffset;
-        *stringLengthP++ = s.size() - 1;
-        stringOffset += s.size() - sizeof(QByteArrayData);
+        *stringLengthP++ = s.size();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        stringOffset += 1 + s.size();
+#else
+        stringOffset += 1 + s.size() - qptrdiff(sizeof(QByteArrayData));
+#endif
         stringCount += 1;
     }
 
     template<uint Flag = IsUnresolvedType>
     constexpr void addTypeString(const StringView& s) {
         for (auto c : s) *stringCharP++ = c;
+        *stringCharP++ = '\0';
         *stringOffestP++ = stringOffset;
-        *stringLengthP++ = s.size() - 1;
+        *stringLengthP++ = s.size();
         *intP++ = Flag | stringCount;
-        stringOffset += s.size() - sizeof(QByteArrayData);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        stringOffset += 1 + s.size();
+#else
+        stringOffset += 1 + s.size() - qptrdiff(sizeof(QByteArrayData));
+#endif
         stringCount += 1;
         intCount += 1;
     }
@@ -635,6 +816,18 @@ struct DataBuilder {
 #endif
         intCount += sizeof... (Ts);
     }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    template <class T, bool isComplete>
+    static constexpr const QtPrivate::QMetaTypeInterface *metaTypeInterface = QtPrivate::qTryMetaTypeInterfaceForType<T, QtPrivate::TypeAndForceComplete<T, std::integral_constant<bool, isComplete>>>();
+
+    template <class T, bool isComplete = false>
+    constexpr void addMetaType()
+    {
+        *metaTypeP++ = metaTypeInterface<T, isComplete>;
+        metaTypeCount += 1;
+    }
+#endif
 };
 
 
@@ -646,14 +839,18 @@ constexpr void generateDataPass(State& state) {
     constexpr bool hasNotify = hasNotifySignal<L, T**>();
     constexpr int classInfoOffset = 14;
     constexpr int methodOffset = classInfoOffset + ObjI::classInfoCount * 2;
-    constexpr int propertyOffset = methodOffset + ObjI::methodCount * 5;
-    constexpr int enumOffset = propertyOffset + ObjI::propertyCount * (hasNotify ? 4: 3);
+    constexpr int propertyOffset = methodOffset + ObjI::methodCount * (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0) ? 6 : 5);
+    constexpr int enumOffset = propertyOffset + ObjI::propertyCount * (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0) ? 5 : (hasNotify ? 4 : 3));
     constexpr int constructorOffset = enumOffset + ObjI::enumCount * (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0) ? 5 : 4);
-    constexpr int paramIndex = constructorOffset + ObjI::constructorCount * 5 ;
+    constexpr int paramIndex = constructorOffset + ObjI::constructorCount * (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0) ? 6 : 5);
     constexpr int constructorParamIndex = paramIndex + methodsParamOffset<L, T**>();
     constexpr int enumValueOffset = constructorParamIndex + constructorParamOffset<L, T**>();
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    state.addInts(QT_VERSION >= QT_VERSION_CHECK(6, 2, 0) ? 10 : 9); // revision
+#else
     state.addInts(QT_VERSION >= QT_VERSION_CHECK(5, 12, 0) ? 8 : 7); // revision
+#endif
     state.addString(ObjI::name);
     state.addStringUntracked(viewLiteral(""));
     state.addInts(
@@ -668,12 +865,24 @@ constexpr void generateDataPass(State& state) {
     //if (state.intCount != classInfoOffset) throw "offset mismatch!";
     foldState<L, ClassInfoStateTag, T**>(ClassInfoGenerator<State>{state});
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    foldState<L, PropertyStateTag, T **>(PropertyMetaTypeGenerator<State, T>{state});
+#endif
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 2, 0)
+    state.template addMetaType<T, true>();
+#endif
+
     //if (state.intCount != methodOffset) throw "offset mismatch!";
     foldMethods<L, T**>(MethodGenerator<State, T>{state, paramIndex});
 
     //if (state.intCount != propertyOffset) throw "offset mismatch!";
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    foldState<L, PropertyStateTag, T **>(PropertyGenerator<State, L, T>{state});
+#else
     foldState<L, PropertyStateTag, T**>(PropertyGenerator<State, T>{state});
     foldState<L, PropertyStateTag, T**>(NotifySignalGenerator<State, L, T, hasNotify>{state});
+#endif
 
     //if (state.intCount != enumOffset) throw "offset mismatch!";
     foldState<L, EnumStateTag, T**>(EnumGenerator<State>{state, enumValueOffset});
@@ -709,10 +918,22 @@ template<class T>
 constexpr LayoutBuilder dataLayout = createLayout<T>();
 #endif
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+struct OffsetLenPair
+{
+    uint offset;
+    uint length;
+};
+#endif
+
 /// Final data holder
 template<std::size_t StringSize, std::size_t StringCount, std::size_t IntCount>
 struct MetaDataHolder {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    RawArray<OffsetLenPair, StringCount + 1> stringOffsetLens;
+#else
     RawArray<QByteArrayData,StringCount> byteArrays;
+#endif
     OwnArray<char, StringSize> stringChars;
 #if __cplusplus > 201700L
     const uint* ints;
@@ -725,18 +946,28 @@ struct MetaDataProvider {
     static constexpr auto stringSize = dataLayout<T>.stringSize;
     static constexpr auto stringCount = dataLayout<T>.stringCount;
     static constexpr auto intCount = dataLayout<T>.intCount;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    static constexpr auto metaTypeCount = dataLayout<T>.metaTypeCount == 0 ? 1 : dataLayout<T>.metaTypeCount;
+#endif
     using MetaDataType = const MetaDataHolder<stringSize, stringCount, intCount>;
 
     struct Arrays {
 #ifndef Q_CC_MSVC
         constexpr static qptrdiff stringOffset = offsetof(MetaDataType, stringChars);
 #else // offsetof does not work with MSVC
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        constexpr static qptrdiff stringOffset = sizeof(MetaDataType::stringOffsetLens);
+#else
         constexpr static qptrdiff stringOffset = sizeof(MetaDataType::byteArrays);
+#endif
 #endif
         RawArray<qptrdiff, stringCount> stringOffsets{};
         RawArray<int, stringCount> stringLengths{};
         RawArray<char, stringSize> stringChars{};
         RawArray<uint, intCount> ints{};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        RawArray<const QtPrivate::QMetaTypeInterface *, metaTypeCount> metaTypes{};
+#endif
     };
 #if __cplusplus > 201700L
     constexpr static Arrays arrays = []() {
@@ -762,22 +993,29 @@ template<class T, std::size_t... Is>
 struct MetaDataBuilder<T, index_sequence<Is...>> {
     using P = MetaDataProvider<T>;
     using MetaDataType = typename P::MetaDataType;
-#if __cplusplus >= 201700L
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    constexpr static MetaDataType meta_data = {
+        {
+            OffsetLenPair{static_cast<uint>(P::arrays.stringOffsets[Is]), P::arrays.stringLengths[Is]}...,
+            OffsetLenPair{static_cast<uint>(P::arrays.stringOffsets[sizeof...(Is) - 1] + P::arrays.stringLengths[sizeof...(Is) - 1]), 0},
+        },
+        P::arrays.stringChars,
+        P::arrays.ints};
+#elif __cplusplus > 201700L
     constexpr static MetaDataType meta_data = {
         {Q_STATIC_BYTE_ARRAY_DATA_HEADER_INITIALIZER_WITH_OFFSET(P::arrays.stringLengths[Is], P::arrays.stringOffsets[Is])...},
         P::arrays.stringChars, P::arrays.ints
     };
 #else
     static MetaDataType meta_data;
-#endif
 };
-#if __cplusplus < 201700L
-template<class T, std::size_t... Is>
+template <class T, std::size_t... Is>
 typename MetaDataBuilder<T, index_sequence<Is...>>::MetaDataType MetaDataBuilder<T, index_sequence<Is...>>::meta_data = {
     {Q_STATIC_BYTE_ARRAY_DATA_HEADER_INITIALIZER_WITH_OFFSET(P::arrays.stringLengths[Is], P::arrays.stringOffsets[Is])...},
-    {P::arrays.stringChars}, {P::arrays.ints}
-};
+    {P::arrays.stringChars},
+    {P::arrays.ints}
 #endif
+};
 
 /// Returns the QMetaObject* of the base type. Use SFINAE to only return it if it exists
 template<typename T>
@@ -814,12 +1052,69 @@ inline auto propReset(F f, O *o) W_RETURN(((o->*f)(),0))
 template <typename... T>
 inline void propReset(T...) {}
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+// note: Qt 6.3 introduced a check here that allows only QObjects - but we need it for Gadgets as well
+template <typename, typename, typename, typename>
+struct FunctorCall;
+template <size_t... II, typename... SignalArgs, typename R, typename Function>
+struct FunctorCall<std::index_sequence<II...>, QtPrivate::List<SignalArgs...>, R, Function>
+{
+    static void call(Function f, void **arg)
+    {
+        f((*reinterpret_cast<typename QtPrivate::RemoveRef<SignalArgs>::Type *>(arg[II + 1]))...), QtPrivate::ApplyReturnValue<R>(arg[0]);
+    }
+};
+template <size_t... II, typename... SignalArgs, typename R, typename... SlotArgs, typename SlotRet, class Obj>
+struct FunctorCall<std::index_sequence<II...>, QtPrivate::List<SignalArgs...>, R, SlotRet (Obj::*)(SlotArgs...)>
+{
+    static void call(SlotRet (Obj::*f)(SlotArgs...), Obj *o, void **arg)
+    {
+        (o->*f)((*reinterpret_cast<typename QtPrivate::RemoveRef<SignalArgs>::Type *>(arg[II + 1]))...), QtPrivate::ApplyReturnValue<R>(arg[0]);
+    }
+};
+template <size_t... II, typename... SignalArgs, typename R, typename... SlotArgs, typename SlotRet, class Obj>
+struct FunctorCall<std::index_sequence<II...>, QtPrivate::List<SignalArgs...>, R, SlotRet (Obj::*)(SlotArgs...) const>
+{
+    static void call(SlotRet (Obj::*f)(SlotArgs...) const, Obj *o, void **arg)
+    {
+        (o->*f)((*reinterpret_cast<typename QtPrivate::RemoveRef<SignalArgs>::Type *>(arg[II + 1]))...), QtPrivate::ApplyReturnValue<R>(arg[0]);
+    }
+};
+template <size_t... II, typename... SignalArgs, typename R, typename... SlotArgs, typename SlotRet, class Obj>
+struct FunctorCall<std::index_sequence<II...>, QtPrivate::List<SignalArgs...>, R, SlotRet (Obj::*)(SlotArgs...) noexcept>
+{
+    static void call(SlotRet (Obj::*f)(SlotArgs...) noexcept, Obj *o, void **arg)
+    {
+        (o->*f)((*reinterpret_cast<typename QtPrivate::RemoveRef<SignalArgs>::Type *>(arg[II + 1]))...), QtPrivate::ApplyReturnValue<R>(arg[0]);
+    }
+};
+template <size_t... II, typename... SignalArgs, typename R, typename... SlotArgs, typename SlotRet, class Obj>
+struct FunctorCall<std::index_sequence<II...>, QtPrivate::List<SignalArgs...>, R, SlotRet (Obj::*)(SlotArgs...) const noexcept>
+{
+    static void call(SlotRet (Obj::*f)(SlotArgs...) const noexcept, Obj *o, void **arg)
+    {
+        (o->*f)((*reinterpret_cast<typename QtPrivate::RemoveRef<SignalArgs>::Type *>(arg[II + 1]))...), QtPrivate::ApplyReturnValue<R>(arg[0]);
+    }
+};
+#endif
+
 struct FriendHelper {
 
     template<typename T>
     static constexpr QMetaObject createMetaObject() {
         using MetaData = MetaDataBuilder<T, make_index_sequence<dataLayout<T>.stringCount>>;
-#if __cplusplus > 201700L
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        using P = MetaDataProvider<T>;
+        return {{
+            parentMetaObject<T>(0),
+            &MetaData::meta_data.stringOffsetLens[0].offset,
+            MetaData::meta_data.ints,
+            T::qt_static_metacall,
+            nullptr,
+            P::arrays.metaTypes,
+            nullptr,
+        }};
+#elif __cplusplus > 201700L
         return { { parentMetaObject<T>(0), MetaData::meta_data.byteArrays, MetaData::meta_data.ints, T::qt_static_metacall, {}, {} } };
 #else
         return { { parentMetaObject<T>(0), MetaData::meta_data.byteArrays, MetaData::meta_data.ints.data, T::qt_static_metacall, {}, {} } };
@@ -836,8 +1131,9 @@ struct FriendHelper {
             if (_id < methodCount)
                 T::qt_static_metacall(_o, _c, _id, _a);
             _id -= methodCount;
-        } else if ((_c >= QMetaObject::ReadProperty && _c <= QMetaObject::QueryPropertyUser)
-                    || _c == QMetaObject::RegisterPropertyMetaType) {
+        }
+        else if (isPropertyMetacall(_c))
+        {
             constexpr int propertyCount = ObjI::propertyCount;
             if (_id < propertyCount)
                 T::qt_static_metacall(_o, _c, _id, _a);
@@ -869,9 +1165,22 @@ QT_WARNING_POP
     static void invokeMethod(T *_o, int _id, void **_a) {
         if (_id == I) {
             using ObjI = typename T::W_MetaObjectCreatorHelper::ObjectInfo;
-            constexpr auto f = ObjI::method(index<I>).func;
-            using P = QtPrivate::FunctionPointer<std::remove_const_t<decltype(f)>>;
-            P::template call<typename P::Arguments, typename P::ReturnType>(f, _o, _a);
+            constexpr auto method = ObjI::method(index<I>);
+            using Func = typename decltype(method)::Func;
+            using FP = QtPrivate::FunctionPointer<Func>;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+            if constexpr (FP::IsPointerToMemberFunction)
+            {
+                FunctorCall<typename decltype(method)::ArgSequence, typename FP::Arguments, typename FP::ReturnType, Func>::call(method.func, _o, _a);
+            }
+            else
+            {
+                (void)_o;
+                FunctorCall<typename decltype(method)::ArgSequence, typename FP::Arguments, typename FP::ReturnType, Func>::call(method.func, _a);
+            }
+#else
+            FP::template call<typename FP::Arguments, typename FP::ReturnType>(method.func, _o, _a);
+#endif
         }
     }
 
@@ -882,11 +1191,16 @@ QT_WARNING_POP
         if (_id == I) {
             using ObjI = typename T::W_MetaObjectCreatorHelper::ObjectInfo;
             constexpr auto f = ObjI::method(index<I>).func;
+            Q_UNUSED(f)
             using P = QtPrivate::FunctionPointer<std::remove_const_t<decltype(f)>>;
             auto _t = QtPrivate::ConnectionTypes<typename P::Arguments>::types();
             uint arg = *reinterpret_cast<uint*>(_a[1]);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            *reinterpret_cast<QMetaType *>(_a[0]) = _t && arg < P::ArgumentCount ? QMetaType(_t[arg]) : QMetaType();
+#else
             *reinterpret_cast<int*>(_a[0]) = _t && arg < P::ArgumentCount ?
                     _t[arg] : -1;
+#endif
         }
     }
 
@@ -901,22 +1215,29 @@ QT_WARNING_POP
         using Type = typename decltype(p)::PropertyType;
         switch(+_c) {
         case QMetaObject::ReadProperty:
-            if (p.getter) {
-                propGet(p.getter, _o, *reinterpret_cast<Type*>(_a[0]));
-            } else if (p.member) {
+            if W_IF_CONSTEXPR (p.getter != nullptr)
+            {
+                propGet(p.getter, _o, *reinterpret_cast<Type *>(_a[0]));
+            }
+            else if W_IF_CONSTEXPR (p.member != nullptr)
+            {
                 propGet(p.member, _o, *reinterpret_cast<Type*>(_a[0]));
             }
             break;
         case QMetaObject::WriteProperty:
-            if (p.setter) {
-                propSet(p.setter, _o, *reinterpret_cast<Type*>(_a[0]));
-            } else if (p.member) {
+            if W_IF_CONSTEXPR (p.setter != nullptr)
+            {
+                propSet(p.setter, _o, *reinterpret_cast<Type *>(_a[0]));
+            }
+            else if W_IF_CONSTEXPR (p.member != nullptr)
+            {
                 propSet(p.member, _o, *reinterpret_cast<Type*>(_a[0]));
                 propNotify(p.notify, p.member, _o);
             }
             break;
         case QMetaObject::ResetProperty:
-            if (p.reset) {
+            if W_IF_CONSTEXPR (p.reset != nullptr)
+            {
                 propReset(p.reset, _o);
             }
             break;
@@ -974,8 +1295,9 @@ QT_WARNING_POP
 #else
             ordered((createInstance<T, ConsI>(_id, _a),0)...);
 #endif
-        } else if ((_c >= QMetaObject::ReadProperty && _c <= QMetaObject::QueryPropertyUser)
-                || _c == QMetaObject::RegisterPropertyMetaType) {
+        }
+        else if (isPropertyMetacall(_c))
+        {
 #if __cplusplus > 201700L
             (propertyOperation<T,PropI>(static_cast<T*>(_o), _c, _id, _a),...);
 #else
@@ -1009,8 +1331,9 @@ QT_WARNING_POP
 #else
             ordered((createInstance<T, ConsI>(_id, _a), 0)...);
 #endif
-        } else if ((_c >= QMetaObject::ReadProperty && _c <= QMetaObject::QueryPropertyUser)
-                || _c == QMetaObject::RegisterPropertyMetaType) {
+        }
+        else if (isPropertyMetacall(_c))
+        {
 #if __cplusplus > 201700L
             (propertyOperation<T,PropI>(_o, _c, _id, _a),...);
 #else
@@ -1031,9 +1354,15 @@ QT_WARNING_POP
     static void* qt_metacast_impl(T *o, const char *_clname) {
         if (!_clname)
             return nullptr;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        using MetaData = MetaDataBuilder<T, make_index_sequence<dataLayout<T>.stringCount>>;
+        if (!strcmp(_clname, MetaData::meta_data.stringChars.data))
+            return o;
+#else
         const QByteArrayDataPtr sd = { const_cast<QByteArrayData*>(T::staticMetaObject.d.stringdata) };
         if (_clname == QByteArray(sd))
             return o;
+#endif
         using ObjI = typename T::W_MetaObjectCreatorHelper::ObjectInfo;
         void *result = {};
         auto l = [&](auto i) {
@@ -1070,13 +1399,20 @@ QT_WARNING_POP
 #define W_MACRO_TEMPLATE_STUFF_HELPER_SECOND2(A,B,...) B
 #define W_MACRO_FIRST_REMOVEPAREN(...) W_MACRO_REMOVEPAREN(W_MACRO_FIRST(__VA_ARGS__))
 
-#define W_OBJECT_IMPL_COMMON(INLINE, ...) \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) struct W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_MetaObjectCreatorHelper { \
-        struct Name { static constexpr auto value = w_internal::viewLiteral(W_MACRO_STRIGNIFY(W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__))); }; \
-        using ObjectInfo = w_internal::ObjectInfo<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_ThisType, Name>; \
-    }; \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) INLINE const QT_INIT_METAOBJECT QMetaObject W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::staticMetaObject = \
-        w_internal::FriendHelper::createMetaObject<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_ThisType>();
+#define W_OBJECT_IMPL_COMMON(INLINE, ...)                                                                                                         \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                                               \
+struct W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_MetaObjectCreatorHelper                                                                          \
+{                                                                                                                                                 \
+    struct Name                                                                                                                                   \
+    {                                                                                                                                             \
+        static constexpr auto defaultName = w_internal::viewLiteral(W_MACRO_STRIGNIFY(W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)));                   \
+        static constexpr auto value = w_internal::fetchExplicitName<typename W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_ThisType>(defaultName, 0); \
+    };                                                                                                                                            \
+    using ObjectInfo = w_internal::ObjectInfo<typename W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_ThisType, Name>;                                 \
+};                                                                                                                                                \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                                               \
+INLINE const QT_INIT_METAOBJECT QMetaObject W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::staticMetaObject =                                            \
+    w_internal::FriendHelper::createMetaObject<typename W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::W_ThisType>();
 
 /// \macro W_OBJECT_IMPL(TYPE [, TEMPLATE_STUFF])
 /// This macro expand to the code that instantiate the QMetaObject. It must be placed outside of
@@ -1088,16 +1424,28 @@ QT_WARNING_POP
 /// Example:  `W_OBJECT_IMPL(MyTemplate<T>, template <typename T>)`
 /// Parentheses are required if there is several template arguments:
 /// `W_OBJECT_IMPL((MyTemplate2<A,B>), template<typename A, typename B>)`
-#define W_OBJECT_IMPL(...) \
-    W_OBJECT_IMPL_COMMON(W_MACRO_EMPTY, __VA_ARGS__) \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) void W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void** _a) \
-    { w_internal::FriendHelper::qt_static_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(_o, _c, _id, _a); } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) const QMetaObject *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::metaObject() const  { return &staticMetaObject; } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) void *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacast(const char *_clname) \
-    { return w_internal::FriendHelper::qt_metacast_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _clname); } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) int W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacall(QMetaObject::Call _c, int _id, void** _a) \
-    { return w_internal::FriendHelper::qt_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _c, _id, _a); }
-
+#define W_OBJECT_IMPL(...)                                                                                             \
+W_OBJECT_IMPL_COMMON(W_MACRO_EMPTY, __VA_ARGS__)                                                                       \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                    \
+void W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a) \
+{                                                                                                                      \
+    w_internal::FriendHelper::qt_static_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(_o, _c, _id, _a);        \
+}                                                                                                                      \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                    \
+const QMetaObject *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::metaObject() const                                          \
+{                                                                                                                      \
+    return this->QObject::d_ptr->metaObject ? this->QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;           \
+}                                                                                                                      \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                    \
+void *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacast(const char *_clname)                                         \
+{                                                                                                                      \
+    return w_internal::FriendHelper::qt_metacast_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _clname);          \
+}                                                                                                                      \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                    \
+int W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacall(QMetaObject::Call _c, int _id, void **_a)                      \
+{                                                                                                                      \
+    return w_internal::FriendHelper::qt_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _c, _id, _a);      \
+}
 
 /// \macro W_GADGET_IMPL(TYPE [, TEMPLATE_STUFF])
 /// Same as W_OBJECT_IMPL, but for a W_GADGET
@@ -1115,16 +1463,28 @@ QT_WARNING_POP
 /// \macro W_OBJECT_IMPL_INLINE(TYPE [, TEMPLATE_STUFF])
 /// Same as W_OBJECT_IMPL, but to be used in a header
 /// (Requires support for c++17 inline variables)
-#define W_OBJECT_IMPL_INLINE(...) \
-    W_OBJECT_IMPL_COMMON(inline, __VA_ARGS__) \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) inline void W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void** _a) \
-    { w_internal::FriendHelper::qt_static_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(_o, _c, _id, _a); } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) inline const QMetaObject *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::metaObject() const  { return &staticMetaObject; } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) inline void *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacast(const char *_clname) \
-    { return w_internal::FriendHelper::qt_metacast_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _clname); } \
-    W_MACRO_TEMPLATE_STUFF(__VA_ARGS__) inline int W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacall(QMetaObject::Call _c, int _id, void** _a) \
-    { return w_internal::FriendHelper::qt_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _c, _id, _a); }
-
+#define W_OBJECT_IMPL_INLINE(...)                                                                                             \
+W_OBJECT_IMPL_COMMON(inline, __VA_ARGS__)                                                                                     \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                           \
+inline void W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a) \
+{                                                                                                                             \
+    w_internal::FriendHelper::qt_static_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(_o, _c, _id, _a);               \
+}                                                                                                                             \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                           \
+inline const QMetaObject *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::metaObject() const                                          \
+{                                                                                                                             \
+    return this->QObject::d_ptr->metaObject ? this->QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;                  \
+}                                                                                                                             \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                           \
+inline void *W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacast(const char *_clname)                                         \
+{                                                                                                                             \
+    return w_internal::FriendHelper::qt_metacast_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _clname);                 \
+}                                                                                                                             \
+W_MACRO_TEMPLATE_STUFF(__VA_ARGS__)                                                                                           \
+inline int W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)::qt_metacall(QMetaObject::Call _c, int _id, void **_a)                      \
+{                                                                                                                             \
+    return w_internal::FriendHelper::qt_metacall_impl<W_MACRO_FIRST_REMOVEPAREN(__VA_ARGS__)>(this, _c, _id, _a);             \
+}
 
 /// \macro W_GADGET_IMPL_INLINE(TYPE [, TEMPLATE_STUFF])
 /// Same as W_GADGET_IMPL, but to be used in a header
@@ -1138,4 +1498,4 @@ QT_WARNING_POP
 /// Same as W_NAMESPACE_IMPL, but to be used in a header
 /// (Requires support for c++17 inline variables)
 #define W_NAMESPACE_IMPL_INLINE(...) \
-    W_OBJECT_IMPL_COMMON(inline, __VA_ARGS__)
+W_OBJECT_IMPL_COMMON(inline, __VA_ARGS__)
