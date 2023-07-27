@@ -11,7 +11,7 @@ let package = Package(
         .target(name: "Qlift", dependencies: ["CQlift"]),
         .target(name: "CQlift", dependencies: ["CQt6Widgets"]),
         .systemLibrary(name: "CQt6Widgets", pkgConfig: "Qt6Widgets"),
-        .target(name: "qlift-uic")
+        .executableTarget(name: "qlift-uic")
     ],
     cxxLanguageStandard: .cxx17
 )
