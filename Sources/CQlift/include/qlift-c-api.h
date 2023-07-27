@@ -15,7 +15,6 @@
 #include "../qlift-QColor.h"
 #include "../qlift-QComboBox.h"
 #include "../qlift-QCoreApplication.h"
-#include "../qlift-QDesktopWidget.h"
 #include "../qlift-QDialog.h"
 #include "../qlift-QDialogButtonBox.h"
 #include "../qlift-QEvent.h"

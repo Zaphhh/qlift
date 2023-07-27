@@ -4,19 +4,19 @@
 
 [[maybe_unused]] void *
 QAction_new(void *icon, const char *text, void *parent) {
-    if (icon != nullptr) {
+    if (icon != nullptr && text != nullptr) {
         return static_cast<void *>(
             new QAction{*static_cast<QIcon *>(icon),
                         text,
-                        static_cast<QWidget *>(parent)});
+                        static_cast<QObject *>(parent)});
     }
 
     if (text != nullptr) {
         return static_cast<void *>(
-            new QAction{text, static_cast<QWidget *>(parent)});
+            new QAction{text, static_cast<QObject *>(parent)});
     }
 
-    return static_cast<void *>(new QAction{static_cast<QWidget *>(parent)});
+    return static_cast<void *>(new QAction{static_cast<QObject *>(parent)});
 }
 
 [[maybe_unused]] const ushort *QAction_text(void *action, int *len) {
