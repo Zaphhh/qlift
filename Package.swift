@@ -9,13 +9,23 @@ prefix = "/opt/homebrew"
 #endif
 
 let cxxSettings: [CXXSetting] = [
-    .unsafeFlags([
+    .unsafeFlags(
+        [
             "-I\(prefix)/opt/qt@6/lib/QtCore.framework/Headers",
             "-I\(prefix)/opt/qt@6/lib/QtGui.framework/Headers",
             "-I\(prefix)/opt/qt@6/lib/QtWidgets.framework/Headers",
             "-I\(prefix)/opt/qt@6/include"
         ],
         .when(platforms: [.macOS])
+    ),
+    .unsafeFlags(
+        [
+            "-IC:\\Qt\\6.4.3\\msvc2019_64\\include\\QtCore",
+            "-IC:\\Qt\\6.4.3\\msvc2019_64\\include\\QtGui",
+            "-IC:\\Qt\\6.4.3\\msvc2019_64\\include\\QtWidgets",
+            "-IC:\\Qt\\6.4.3\\msvc2019_64\\include"
+        ],
+        .when(platforms: [.windows])
     )
 ]
 
@@ -26,6 +36,13 @@ let linkerSettings: [LinkerSetting] = [
             "\(prefix)/opt/qt@6/lib/QtWidgets.framework/QtWidgets",
         ],
         .when(platforms: [.macOS])
+    ),
+    .unsafeFlags([
+            "C:\\Qt\\6.4.3\\msvc2019_64\\lib\\Qt6Core.lib",
+            "C:\\Qt\\6.4.3\\msvc2019_64\\lib\\Qt6Gui.lib",
+            "C:\\Qt\\6.4.3\\msvc2019_64\\lib\\Qt6Widgets.lib",
+        ],
+        .when(platforms: [.windows])
     )
 ]
 
@@ -44,7 +61,7 @@ let package = Package(
             cxxSettings: cxxSettings,
             linkerSettings: linkerSettings
         ),
-        .systemLibrary(name: "CQt6Widgets", pkgConfig: "Qt6Widgets"),
+        .systemLibrary(name: "CQt6Widgets"),
         .executableTarget(name: "qlift-uic")
     ],
     cxxLanguageStandard: .cxx17
