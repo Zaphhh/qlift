@@ -30,7 +30,7 @@
 }
 
 [[maybe_unused]] void QColor_setNamedColor(void *color, const char *name) {
-    static_cast<QColor *>(color)->setNamedColor(name);
+    *static_cast<QColor *>(color) = QColor::fromString(name);
 }
 
 [[maybe_unused]] void QColor_setRgb(void *color, int r, int g, int b, int a) {

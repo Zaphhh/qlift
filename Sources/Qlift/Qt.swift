@@ -1,5 +1,5 @@
 public struct Qt {
-    public struct Alignment: OptionSet {
+    public struct Alignment: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -27,7 +27,7 @@ public struct Qt {
         case Vertical = 2
     }
 
-    public struct WindowFlags: OptionSet {
+    public struct WindowFlags: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -76,7 +76,7 @@ public struct Qt {
         public static let WindowFullscreenButtonHint = WindowFlags(rawValue: -2147483648)
     }
 
-    public struct TimerType: OptionSet {
+    public struct TimerType: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -88,7 +88,7 @@ public struct Qt {
         public static let VeryCoarseTimer = TimerType(rawValue: 2)
     }
 
-    public struct MouseButton: OptionSet {
+    public struct MouseButton: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -143,7 +143,7 @@ public struct Qt {
         case AA_DisableSessionManager = 31
     }
 
-    public struct WindowStates: OptionSet {
+    public struct WindowStates: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {

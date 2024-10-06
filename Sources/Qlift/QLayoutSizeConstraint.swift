@@ -1,4 +1,4 @@
-public struct QLayoutSizeConstraint: OptionSet {
+public struct QLayoutSizeConstraint: OptionSet, Sendable {
     public let rawValue: Int32
 
     public init(rawValue: Int32) {

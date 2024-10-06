@@ -3,7 +3,7 @@ import CQlift
 
 public class QCoreApplication: QObject {
     private var argc = CommandLine.argc
-    public static weak var instance: QCoreApplication!
+    nonisolated(unsafe) public static weak var instance: QCoreApplication!
 
     public init() {
         super.init(ptr: QCoreApplication_new(&argc, CommandLine.unsafeArgv))

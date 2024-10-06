@@ -19,7 +19,7 @@ public class QSizePolicy {
         }
     }
 
-    public struct Policy: OptionSet {
+    public struct Policy: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -35,7 +35,7 @@ public class QSizePolicy {
         public static let Ignored = Policy(rawValue: 13)
     }
 
-    public struct ControlType: OptionSet {
+    public struct ControlType: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {

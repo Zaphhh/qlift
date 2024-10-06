@@ -51,7 +51,7 @@ open class QMessageBox: QDialog {
 }
 
 extension QMessageBox {
-    public struct Icon: OptionSet {
+    public struct Icon: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
@@ -65,7 +65,7 @@ extension QMessageBox {
         public static let Question = Icon(rawValue: 4)
     }
 
-    public struct StandardButton: OptionSet {
+    public struct StandardButton: OptionSet, Sendable {
         public let rawValue: Int32
 
         public init(rawValue: Int32) {
